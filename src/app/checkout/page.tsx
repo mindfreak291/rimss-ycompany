@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAppSelector, useAppDispatch } from '@/lib/store';
 import { clearCart } from '@/lib/store/cartSlice';
@@ -13,6 +13,7 @@ export default function CheckoutPage() {
   const dispatch = useAppDispatch();
   const { items, total } = useAppSelector((state) => state.cart);
 
+  const [mounted, setMounted] = useState(false);
   const [step, setStep] = useState<'shipping' | 'payment' | 'processing'>('shipping');
   const [shippingAddress, setShippingAddress] = useState<ShippingAddress>({
     fullName: '',
@@ -33,10 +34,43 @@ export default function CheckoutPage() {
 
   const [paymentMethod, setPaymentMethod] = useState<'credit_card' | 'paypal' | 'cod'>('credit_card');
 
-  // Redirect if cart is empty
+  // Handle client-side mounting
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Redirect if cart is empty (only on client side)
+  useEffect(() => {
+    if (mounted && items.length === 0 && step !== 'processing') {
+      router.push('/cart');
+    }
+  }, [mounted, items.length, step, router]);
+
+  // Don't render until mounted (prevents SSR issues)
+  if (!mounted) {
+    return (
+      <div className="py-16 bg-gray-50 min-h-screen">
+        <div className="container-custom">
+          <div className="max-w-md mx-auto text-center">
+            <LoadingSpinner size="lg" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show loading if redirecting
   if (items.length === 0 && step !== 'processing') {
-    router.push('/cart');
-    return null;
+    return (
+      <div className="py-16 bg-gray-50 min-h-screen">
+        <div className="container-custom">
+          <div className="max-w-md mx-auto text-center">
+            <LoadingSpinner size="lg" />
+            <p className="mt-4 text-gray-600">Redirecting to cart...</p>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   const handleShippingSubmit = (e: React.FormEvent) => {
