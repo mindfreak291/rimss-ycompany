@@ -5,8 +5,18 @@ import { useRouter } from 'next/navigation';
 import { useAppSelector, useAppDispatch } from '@/lib/store';
 import { clearCart } from '@/lib/store/cartSlice';
 import { showNotification } from '@/lib/store/uiSlice';
-import { Input, Button, Select, LoadingSpinner } from '@/components/atoms';
+import { Input, Button, LoadingSpinner } from '@/components/atoms';
 import { ShippingAddress, PaymentInfo } from '@/types';
+import {
+  formatCardNumber,
+  formatExpiryDate,
+  formatCVV,
+  detectCardType,
+  getCardNumberError,
+  getExpiryDateError,
+  getCVVError,
+  getCardholderNameError,
+} from '@/lib/utils/cardValidation';
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -33,6 +43,17 @@ export default function CheckoutPage() {
   });
 
   const [paymentMethod, setPaymentMethod] = useState<'credit_card' | 'paypal' | 'cod'>('credit_card');
+  
+  // Validation errors
+  const [errors, setErrors] = useState({
+    cardNumber: '',
+    cardName: '',
+    expiryDate: '',
+    cvv: '',
+  });
+
+  // Card type detection
+  const [cardType, setCardType] = useState('Unknown');
 
   // Handle client-side mounting
   useEffect(() => {
@@ -45,6 +66,14 @@ export default function CheckoutPage() {
       router.push('/cart');
     }
   }, [mounted, items.length, step, router]);
+
+  // Detect card type when card number changes
+  useEffect(() => {
+    if (paymentInfo.cardNumber) {
+      const type = detectCardType(paymentInfo.cardNumber);
+      setCardType(type);
+    }
+  }, [paymentInfo.cardNumber]);
 
   // Don't render until mounted (prevents SSR issues)
   if (!mounted) {
@@ -90,15 +119,29 @@ export default function CheckoutPage() {
     setStep('payment');
   };
 
+  const validatePaymentForm = (): boolean => {
+    const newErrors = {
+      cardNumber: getCardNumberError(paymentInfo.cardNumber) || '',
+      cardName: getCardholderNameError(paymentInfo.cardName) || '',
+      expiryDate: getExpiryDateError(paymentInfo.expiryDate) || '',
+      cvv: getCVVError(paymentInfo.cvv, cardType) || '',
+    };
+
+    setErrors(newErrors);
+
+    // Check if any errors exist
+    return !Object.values(newErrors).some(error => error !== '');
+  };
+
   const handlePaymentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (paymentMethod === 'credit_card') {
       // Validate payment info
-      if (!paymentInfo.cardNumber || !paymentInfo.cardName || !paymentInfo.expiryDate || !paymentInfo.cvv) {
+      if (!validatePaymentForm()) {
         dispatch(
           showNotification({
-            message: 'Please fill in all payment details',
+            message: 'Please fix the errors in the form',
             type: 'error',
           })
         );
@@ -138,10 +181,50 @@ export default function CheckoutPage() {
   };
 
   const handlePaymentChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    let formattedValue = value;
+
+    // Format based on field
+    if (name === 'cardNumber') {
+      formattedValue = formatCardNumber(value);
+      // Clear error on change
+      setErrors(prev => ({ ...prev, cardNumber: '' }));
+    } else if (name === 'expiryDate') {
+      formattedValue = formatExpiryDate(value);
+      setErrors(prev => ({ ...prev, expiryDate: '' }));
+    } else if (name === 'cvv') {
+      const maxLength = cardType === 'American Express' ? 4 : 3;
+      formattedValue = formatCVV(value, maxLength);
+      setErrors(prev => ({ ...prev, cvv: '' }));
+    } else if (name === 'cardName') {
+      setErrors(prev => ({ ...prev, cardName: '' }));
+    }
+
     setPaymentInfo({
       ...paymentInfo,
-      [e.target.name]: e.target.value,
+      [name]: formattedValue,
     });
+  };
+
+  // Validate on blur
+  const handleCardNumberBlur = () => {
+    const error = getCardNumberError(paymentInfo.cardNumber);
+    setErrors(prev => ({ ...prev, cardNumber: error || '' }));
+  };
+
+  const handleCardNameBlur = () => {
+    const error = getCardholderNameError(paymentInfo.cardName);
+    setErrors(prev => ({ ...prev, cardName: error || '' }));
+  };
+
+  const handleExpiryBlur = () => {
+    const error = getExpiryDateError(paymentInfo.expiryDate);
+    setErrors(prev => ({ ...prev, expiryDate: error || '' }));
+  };
+
+  const handleCVVBlur = () => {
+    const error = getCVVError(paymentInfo.cvv, cardType);
+    setErrors(prev => ({ ...prev, cvv: error || '' }));
   };
 
   if (step === 'processing') {
@@ -316,39 +399,59 @@ export default function CheckoutPage() {
                 <form onSubmit={handlePaymentSubmit} className="space-y-4">
                   {paymentMethod === 'credit_card' && (
                     <>
-                      <Input
-                        label="Card Number"
-                        name="cardNumber"
-                        value={paymentInfo.cardNumber}
-                        onChange={handlePaymentChange}
-                        required
-                        placeholder="1234 5678 9012 3456"
-                        type="text"
-                      />
+                      {/* Card Number with Type Detection */}
+                      <div>
+                        <Input
+                          label="Card Number"
+                          name="cardNumber"
+                          value={paymentInfo.cardNumber}
+                          onChange={handlePaymentChange}
+                          onBlur={handleCardNumberBlur}
+                          error={errors.cardNumber}
+                          required
+                          placeholder="1234 5678 9012 3456"
+                          type="text"
+                        />
+                        {cardType !== 'Unknown' && paymentInfo.cardNumber && !errors.cardNumber && (
+                          <p className="mt-1 text-sm text-green-600">
+                            {cardType} detected ✓
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Cardholder Name */}
                       <Input
                         label="Cardholder Name"
                         name="cardName"
                         value={paymentInfo.cardName}
                         onChange={handlePaymentChange}
+                        onBlur={handleCardNameBlur}
+                        error={errors.cardName}
                         required
                         placeholder="John Doe"
                       />
+
+                      {/* Expiry and CVV */}
                       <div className="grid grid-cols-2 gap-4">
                         <Input
                           label="Expiry Date"
                           name="expiryDate"
                           value={paymentInfo.expiryDate}
                           onChange={handlePaymentChange}
+                          onBlur={handleExpiryBlur}
+                          error={errors.expiryDate}
                           required
                           placeholder="MM/YY"
                         />
                         <Input
-                          label="CVV"
+                          label={`CVV ${cardType === 'American Express' ? '(4 digits)' : '(3 digits)'}`}
                           name="cvv"
                           value={paymentInfo.cvv}
                           onChange={handlePaymentChange}
+                          onBlur={handleCVVBlur}
+                          error={errors.cvv}
                           required
-                          placeholder="123"
+                          placeholder={cardType === 'American Express' ? '1234' : '123'}
                           type="text"
                         />
                       </div>
